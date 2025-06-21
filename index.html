@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NK冒险-增强版</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
+    <style>
+        body { 
+            text-align: center; 
+            margin: 0; 
+            padding: 20px;
+            background: linear-gradient(to right, #ff9966, #ff5e62);
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            background: #87CEEB;
+            border: 3px solid #333;
+            margin-top: 10px;
+            max-width: 100%;
+        }
+        #loading {
+            padding: 20px;
+            background: rgba(255,255,255,0.8);
+            border-radius: 10px;
+            margin: 20px auto;
+            max-width: 500px;
+        }
+        #progress-bar {
+            height: 20px;
+            background: #ddd;
+            border-radius: 10px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        #progress {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(to right, #4CAF50, #8BC34A);
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <h1>🐾 NK的大冒险 🎵</h1>
+    <div id="loading">
+        <h3>游戏加载中...</h3>
+        <div id="progress-bar">
+            <div id="progress"></div>
+        </div>
+        <p id="status">初始化环境...</p >
+        <p>首次加载需要约1分钟，请耐心等待</p >
+    </div>
+    <canvas id="game" width="800" height="300"></canvas>
+    <p>操作：空格键跳跃 | 手机点击屏幕</p >
+
+    <script>
+        async function startGame() {
+            const updateStatus = (percent, msg) => {
+                document.getElementById("progress").style.width = percent + "%";
+                document.getElementById("status").textContent = msg;
+            };
+
+            try {
+                // 阶段1：加载Pyodide
+                updateStatus(10, "加载Python环境...");
+                window.pyodide = await loadPyodide({
+                    indexURL: "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/"
+                });
+
+                // 阶段2：加载Pygame
+                updateStatus(30, "加载游戏引擎...");
+                await pyodide.loadPackage("pygame");
+
+                // 阶段3：预加载资源
+                updateStatus(50, "加载游戏素材...");
+                await pyodide.runPython(`
+                    import pygame
+                    import io
+                    from js import fetch
+
+                    # 初始化混音器
+                    pygame.mixer.init()
+
+                    # 异步加载资源
+                    async def load_resource(url, resource_type):
+                        response = await fetch(url)
+                        if resource_type == "image":
+                            return pygame.image.load(io.BytesIO(await response.arrayBuffer()))
+                        elif resource_type == "sound":
+                            sound_data = await response.arrayBuffer()
+                            with open("temp.sound", "wb") as f:
+                                f.write(sound_data.to_bytes())
+                            return pygame.mixer.Sound("temp.sound")
+                `);
+
+                // 阶段4：运行游戏主代码
+                updateStatus(80, "初始化游戏...");
+                await pyodide.runPython(`
+                    # 加载远程资源（替换为你的GitHub文件链接）
+                    player_img = await load_resource("https://raw.githubusercontent.com/你的用户名/仓库名/main/player.png", "image")
+                    obstacle_img = await load_resource("https://raw.githubusercontent.com/你的用户名/仓库名/main/obstacle.png", "image")
+                    jump_sound = await load_resource("https://raw.githubusercontent.com/你的用户名/仓库名/main/jump.wav", "sound")
+
+                    # 游戏初始化
+                    pygame.init()
+                    screen = pygame.display.set_mode((800, 300))
+                    clock = pygame.time.Clock()
+
+                    # 游戏参数
+                    class Player:
+                        def __init__(self):
+                            self.rect = pygame.Rect(50, 200, 60, 80)
+                            self.jump_power = -15
+                            self.gravity = 0.5
+                            self.velocity = 0
+                            self.image = pygame.transform.scale(player_img, (60, 80))
+
+                        def jump(self):
+                            if self.rect.y >= 200:
+                                self.velocity = self.jump_power
+                                jump_sound.play()
+
+                        def update(self):
+                            self.velocity += self.gravity
+                            self.rect.y += self.velocity
+                            if self.rect.y > 200:
+                                self.rect.y = 200
+                                self.velocity = 0
+
+                    # 障碍物类
+                    class Obstacle:
+                        def __init__(self):
+                            self.width = 40
+                            self.height = random.randint(50, 100)
+                            self.rect = pygame.Rect(800, 200-self.height, self.width, self.height)
+                            self.image = pygame.transform.scale(obstacle_img, (self.width, self.height))
+
+                    # 游戏主循环
+                    player = Player()
+                    obstacles = []
+                    score = 0
+                    running = True
+
+                    while running:
+                        # 事件处理
+                        for event in pygame.event.get():
+                            if event.type == pygame.QUIT:
+                                running = False
+
+                        # 键盘控制
+                        keys = pygame.key.get_pressed()
+                        if keys[pygame.K_SPACE]:
+                            player.jump()
+
+                        # 游戏逻辑
+                        if random.random() < 0.02:
+                            obstacles.append(Obstacle())
+
+                        for obs in obstacles[:]:
+                            obs.rect.x -= 8
+                            if obs.rect.colliderect(player.rect):
+                                running = False
+                            if obs.rect.x < -50:
+                                obstacles.remove(obs)
+                                score += 1
+
+                        player.update()
+
+                        # 绘制
+                        screen.fill((135, 206, 235))
+                        pygame.draw.rect(screen, (139, 69, 19), (0, 200, 800, 100))
+                        screen.blit(player.image, player.rect)
+                        for obs in obstacles:
+                            screen.blit(obs.image, obs.rect)
+
+                        # 显示分数
+                        font = pygame.font.SysFont(None, 36)
+                        text = font.render(f"分数: {score}", True, (0,0,0))
+                        screen.blit(text, (10,10))
+
+                        pygame.display.flip()
+                        clock.tick(60)
+                `);
+
+                updateStatus(100, "加载完成！");
+                setTimeout(() => {
+                    document.getElementById("loading").style.display = "none";
+                }, 1000);
+
+            } catch (error) {
+                document.getElementById("status").textContent = "加载失败: " + error.message;
+                console.error(error);
+            }
+        }
+
+        // 启动游戏
+        startGame();
+
+        // 手机触摸控制
+        document.getElementById("game").addEventListener("click", () => {
+            const event = new KeyboardEvent("keydown", { key: " " });
+            document.dispatchEvent(event);
+        });
+    </script>
+</body>
+</html>
